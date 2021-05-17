@@ -41,25 +41,8 @@ namespace DatabaseHelper
             command.CommandText = commandText;
             command.CommandType = commandType;
             if (parameters != null)
-            {
-                foreach (var parameter in parameters)
-                {
-                    DbParameter databaseParameter = command.CreateParameter();
-                    Rewrite(parameter, databaseParameter);
-                    command.Parameters.Add(databaseParameter);
-                }
-            }
+                command.Parameters.AddRange(parameters);
             return command;
-
-            void Rewrite(DbParameter from, DbParameter to)
-            {
-                to.ParameterName = from.ParameterName;
-                to.DbType = from.DbType;
-                to.Value = from.Value;
-                to.Direction = from.Direction;
-                to.Size = from.Size;
-                to.IsNullable = from.IsNullable;
-            }
         }
         
         public DbCommand GetCommand(string commandText, params DbParameter[] parameters)
