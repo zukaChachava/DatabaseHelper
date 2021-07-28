@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Transactions;
 
 namespace DatabaseHelper
 {
@@ -37,19 +38,21 @@ namespace DatabaseHelper
         {
             CheckIfDisposed();
 
-            DbCommand command = GetConnection().CreateCommand();
+            DbCommand command;
+            if (_transaction != null && _transaction.Connection != null)
+                command = _transaction.Connection.CreateCommand();
+            else
+                command = GetConnection().CreateCommand();
+            
             command.CommandText = commandText;
             command.CommandType = commandType;
             if (parameters != null)
                 command.Parameters.AddRange(parameters);
+            if (TransactionIsOn())
+                command.Transaction = _transaction;
             return command;
         }
         
-        public DbCommand GetCommand(string commandText, params DbParameter[] parameters)
-        {
-            return GetCommand(commandText, CommandType.Text, parameters);
-        }
-
         public int ExecuteNonQuery(string commandText, CommandType commandType, params DbParameter[] parameters)
         {
             CheckIfDisposed();
@@ -60,10 +63,7 @@ namespace DatabaseHelper
             {
                 if(command.Connection.State == ConnectionState.Closed)
                     command.Connection.Open();
-
-                if (TransactionIsOn())
-                    command.Transaction = _transaction;
-
+                
                 return command.ExecuteNonQuery();
             }
             finally
@@ -78,6 +78,19 @@ namespace DatabaseHelper
             return ExecuteNonQuery(commandText, CommandType.Text, parameters);
         }
 
+        public int ExecuteNonQuery(string commandText, CommandType commandType, DbTransaction transaction, params DbParameter[] parameters)
+        {
+            if (_transaction != null && _transaction.Connection != null && !transaction.Equals(_transaction))
+                throw new TransactionException("native transaction is open, Can not take another one");
+            _transaction = transaction;
+            return GetCommand(commandText, commandType, parameters).ExecuteNonQuery();
+        }
+
+        public int ExecuteNonQuery(string commandText, DbTransaction transaction, params DbParameter[] parameters)
+        {
+            return ExecuteNonQuery(commandText, CommandType.Text, transaction, parameters);
+        }
+
         public object ExecuteScalar(string commandText, CommandType commandType, params DbParameter[] parameters)
         {
             CheckIfDisposed();
@@ -88,10 +101,6 @@ namespace DatabaseHelper
             {
                 if (command.Connection.State == ConnectionState.Closed)
                     command.Connection.Open();
-
-                if (TransactionIsOn())
-                    command.Transaction = _transaction;
-
                 return command.ExecuteScalar();
             }
             finally
@@ -106,6 +115,19 @@ namespace DatabaseHelper
             return ExecuteScalar(commandText, CommandType.Text, parameters);
         }
         
+        public object ExecuteScalar(string commandText, CommandType commandType, DbTransaction transaction, params DbParameter[] parameters)
+        {
+            if (_transaction != null && _transaction.Connection != null && !transaction.Equals(_transaction))
+                throw new TransactionException("native transaction is open, Can not take another one");
+            _transaction = transaction;
+            return GetCommand(commandText, commandType, parameters).ExecuteScalar();
+        }
+
+        public object ExecuteScalar(string commandText, DbTransaction transaction, params DbParameter[] parameters)
+        {
+            return ExecuteScalar(commandText, CommandType.Text, transaction, parameters);
+        }
+        
         public DbDataReader ExecuteReader(string commandText, CommandType commandType, params DbParameter[] parameters)
         {
             CheckIfDisposed();
@@ -114,9 +136,6 @@ namespace DatabaseHelper
 
             if(command.Connection.State == ConnectionState.Closed)
                 command.Connection.Open();
-
-            if (TransactionIsOn())
-                command.Transaction = _transaction;
 
             return command.ExecuteReader();
         }
@@ -131,7 +150,7 @@ namespace DatabaseHelper
             CheckIfDisposed();
             CheckIfSingleTone();
 
-            if (_transaction == null || _transaction.Connection != null)
+            if (_transaction == null || _transaction.Connection == null)
             {
                 GetConnection().Open();
                 _transaction = _connection.BeginTransaction();
@@ -162,6 +181,16 @@ namespace DatabaseHelper
             _transaction.Rollback();
         }
 
+        public void AbortAnyTransaction(DbTransaction transaction)
+        {
+            if (transaction.Connection == null)
+                throw new Exception("Transaction is not valid");
+
+            DbConnection connection = transaction.Connection;
+            transaction.Rollback();
+            connection.Close();
+        }
+
         public DbParameter[] GetParameters(IDictionary<string, object> parameters)
         {
             DbParameter[] sqlParameters = new DbParameter[parameters.Count];
@@ -171,7 +200,7 @@ namespace DatabaseHelper
             {
                 DbParameter parameter = GetConnection().CreateCommand().CreateParameter();
                 parameter.ParameterName = pair.Key;
-                parameter.Value = pair.Value;
+                parameter.Value = pair.Value != null ? pair.Value : DBNull.Value;
                 sqlParameters[index++] = parameter;
             }
             
